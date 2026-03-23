@@ -1,0 +1,82 @@
+name: Build SamsungCamera Portrait Zoom Module from ZIP
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install build-tools
+        run: |
+          yes | sdkmanager --licenses > /dev/null || true
+          sdkmanager "platform-tools" "build-tools;35.0.0"
+
+      - name: Unzip builder package
+        run: |
+          unzip -o SamsungCamera_PortraitZoom_ModuleBuilder_GitHub.zip -d src
+          ls -R src
+
+      - name: Download Apktool
+        run: |
+          curl -L -o apktool.jar https://github.com/iBotPeaches/Apktool/releases/download/v3.0.1/apktool_3.0.1.jar
+          java -jar apktool.jar --version
+
+      - name: Decode SamsungCamera.apk
+        run: |
+          mkdir work
+          java -jar apktool.jar d -f -o work/decoded src/assets/SamsungCamera.apk
+
+      - name: Patch portrait zoom logic
+        run: |
+          python3 src/scripts/patch_portrait_zoom.py work/decoded > work/patch_report.txt
+          cat work/patch_report.txt
+
+      - name: Rebuild APK
+        run: |
+          java -jar apktool.jar b work/decoded -o work/SamsungCamera_mod_unsigned.apk
+
+      - name: Generate debug keystore
+        run: |
+          keytool -genkeypair -v -keystore work/debug.keystore -storepass android -keypass android -keyalg RSA -keysize 2048 -validity 10000 -alias androiddebugkey -dname "CN=Android Debug,O=Android,C=US"
+
+      - name: Align APK
+        run: |
+          ZIPALIGN=$(find "$ANDROID_SDK_ROOT/build-tools" -name zipalign | sort | tail -n 1)
+          "$ZIPALIGN" -f 4 work/SamsungCamera_mod_unsigned.apk work/SamsungCamera_mod_aligned.apk
+
+      - name: Sign APK
+        run: |
+          APKSIGNER=$(find "$ANDROID_SDK_ROOT/build-tools" -name apksigner | sort | tail -n 1)
+          "$APKSIGNER" sign --ks work/debug.keystore --ks-pass pass:android --key-pass pass:android --ks-key-alias androiddebugkey --out work/samsungcamera_portrait_zoom_mod.apk work/SamsungCamera_mod_aligned.apk
+          "$APKSIGNER" verify work/samsungcamera_portrait_zoom_mod.apk
+
+      - name: Build systemless module ZIP
+        run: |
+          python3 src/scripts/make_module.py work/samsungcamera_portrait_zoom_mod.apk work/SamsungCamera_PortraitZoom_Systemless_Module.zip
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: samsungcamera-portrait-zoom-module-artifacts
+          path: |
+            work/samsungcamera_portrait_zoom_mod.apk
+            work/SamsungCamera_PortraitZoom_Systemless_Module.zip
+            work/patch_report.txt
